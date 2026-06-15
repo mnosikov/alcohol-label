@@ -1,0 +1,210 @@
+{
+  "name": "golden-label-verification-evals",
+  "version": 1,
+  "cases": [
+    {
+      "id": "vision_pass_after_low_ocr",
+      "description": "Low OCR confidence escalates to vision; vision extracts all required evidence.",
+      "application": {
+        "brand_name": "OLD TOM DISTILLERY",
+        "class_type": "Bourbon",
+        "alcohol_content": "45% Alc./Vol.",
+        "net_contents": "750 mL"
+      },
+      "ocr": {
+        "text": "",
+        "confidence": 0.0
+      },
+      "vision": {
+        "extracted": {
+          "brand_name": "OLD TOM DISTILLERY",
+          "class_type": "Bourbon",
+          "alcohol_content": "45% Alc./Vol.",
+          "net_contents": "750 mL",
+          "government_warning": "__CANONICAL_GOVERNMENT_WARNING__",
+          "warning_prefix_bold": true
+        }
+      },
+      "expected_recommendation": "PASS",
+      "expected_status": "machine_passed",
+      "tags": ["pass", "ocr_escalation", "vision"]
+    },
+    {
+      "id": "vision_fail_abv_mismatch",
+      "description": "Vision finds a different alcohol statement than the application.",
+      "application": {
+        "brand_name": "RIVER ROAD",
+        "class_type": "Vodka",
+        "alcohol_content": "40% Alc./Vol.",
+        "net_contents": "750 mL"
+      },
+      "ocr": {
+        "text": "",
+        "confidence": 0.0
+      },
+      "vision": {
+        "extracted": {
+          "brand_name": "RIVER ROAD",
+          "class_type": "Vodka",
+          "alcohol_content": "35% Alc./Vol.",
+          "net_contents": "750 mL",
+          "government_warning": "__CANONICAL_GOVERNMENT_WARNING__",
+          "warning_prefix_bold": true
+        }
+      },
+      "expected_recommendation": "FAIL",
+      "expected_status": "machine_failed",
+      "tags": ["fail", "field_mismatch", "alcohol_content"]
+    },
+    {
+      "id": "vision_fail_missing_warning",
+      "description": "Required statutory warning is absent from otherwise matching extraction.",
+      "application": {
+        "brand_name": "CANYON RIDGE",
+        "class_type": "Red Wine",
+        "alcohol_content": "13.8% Alc./Vol.",
+        "net_contents": "750 mL"
+      },
+      "ocr": {
+        "text": "",
+        "confidence": 0.0
+      },
+      "vision": {
+        "extracted": {
+          "brand_name": "CANYON RIDGE",
+          "class_type": "Red Wine",
+          "alcohol_content": "13.8% Alc./Vol.",
+          "net_contents": "750 mL",
+          "warning_prefix_bold": true
+        }
+      },
+      "expected_recommendation": "FAIL",
+      "expected_status": "machine_failed",
+      "tags": ["fail", "missing_warning"]
+    },
+    {
+      "id": "vision_fail_warning_title_case",
+      "description": "Government warning prefix is present but not exact statutory uppercase.",
+      "application": {
+        "brand_name": "WILLOW STILL",
+        "class_type": "Gin",
+        "alcohol_content": "42% Alc./Vol.",
+        "net_contents": "750 mL"
+      },
+      "ocr": {
+        "text": "",
+        "confidence": 0.0
+      },
+      "vision": {
+        "extracted": {
+          "brand_name": "WILLOW STILL",
+          "class_type": "Gin",
+          "alcohol_content": "42% Alc./Vol.",
+          "net_contents": "750 mL",
+          "government_warning": "Government Warning: malformed statutory warning",
+          "warning_prefix_bold": true
+        }
+      },
+      "expected_recommendation": "FAIL",
+      "expected_status": "machine_failed",
+      "tags": ["fail", "warning_format"]
+    },
+    {
+      "id": "provider_failure_routes_review",
+      "description": "No local OCR evidence and vision provider failure routes to human review.",
+      "application": {
+        "brand_name": "HARBOR LAGER",
+        "class_type": "Beer",
+        "alcohol_content": "5.1% Alc./Vol.",
+        "net_contents": "12 fl oz"
+      },
+      "ocr": {
+        "text": "",
+        "confidence": 0.0
+      },
+      "vision": {
+        "error": "Vision provider disabled or blocked"
+      },
+      "expected_recommendation": "NEEDS_REVIEW",
+      "expected_status": "needs_review",
+      "tags": ["needs_review", "provider_failure", "blocked_network"]
+    },
+    {
+      "id": "ocr_exact_warning_passes_without_bold_evidence",
+      "description": "OCR reads exact warning text confidently; separate bold evidence is unavailable and provider is unavailable.",
+      "application": {
+        "brand_name": "OAK BARREL",
+        "class_type": "Bourbon",
+        "alcohol_content": "45% Alc./Vol.",
+        "net_contents": "750 mL"
+      },
+      "ocr": {
+        "text": "OAK BARREL\nBourbon\n45% Alc./Vol.\n750 mL\n__CANONICAL_GOVERNMENT_WARNING__",
+        "confidence": 0.91
+      },
+      "vision": {
+        "error": "Vision provider disabled or blocked"
+      },
+      "expected_recommendation": "PASS",
+      "expected_status": "machine_passed",
+      "tags": ["pass", "ocr", "warning_prefix"]
+    },
+    {
+      "id": "poor_image_routes_review",
+      "description": "Vision can read fields but flags poor image quality, so a human should decide.",
+      "application": {
+        "brand_name": "FOG HILL",
+        "class_type": "Hard Tea",
+        "alcohol_content": "6% Alc./Vol.",
+        "net_contents": "500 mL"
+      },
+      "ocr": {
+        "text": "",
+        "confidence": 0.0
+      },
+      "vision": {
+        "extracted": {
+          "brand_name": "FOG HILL",
+          "class_type": "Hard Tea",
+          "alcohol_content": "6% Alc./Vol.",
+          "net_contents": "500 mL",
+          "government_warning": "__CANONICAL_GOVERNMENT_WARNING__",
+          "warning_prefix_bold": true,
+          "image_quality": "poor"
+        }
+      },
+      "expected_recommendation": "NEEDS_REVIEW",
+      "expected_status": "needs_review",
+      "tags": ["needs_review", "poor_image", "image_quality"]
+    },
+    {
+      "id": "sampled_machine_pass_routes_review",
+      "description": "A clean machine pass is selected for sampled review to measure the blind spot.",
+      "application": {
+        "brand_name": "SAMPLE HOUSE",
+        "class_type": "IPA",
+        "alcohol_content": "6.5% Alc./Vol.",
+        "net_contents": "12 fl oz"
+      },
+      "ocr": {
+        "text": "",
+        "confidence": 0.0
+      },
+      "vision": {
+        "extracted": {
+          "brand_name": "SAMPLE HOUSE",
+          "class_type": "IPA",
+          "alcohol_content": "6.5% Alc./Vol.",
+          "net_contents": "12 fl oz",
+          "government_warning": "__CANONICAL_GOVERNMENT_WARNING__",
+          "warning_prefix_bold": true
+        }
+      },
+      "sampled_review_rate": 1.0,
+      "image_sha256": "sampled-pass-image",
+      "expected_recommendation": "PASS",
+      "expected_status": "needs_review",
+      "tags": ["pass", "needs_review", "sampled_review"]
+    }
+  ]
+}
