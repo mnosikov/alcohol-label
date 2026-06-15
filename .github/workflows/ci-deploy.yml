@@ -1,0 +1,217 @@
+name: CI and Deploy
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      purge_cases:
+        description: "Clear cases, batches, jobs, evidence, and audit rows after deploy"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+
+permissions:
+  contents: read
+
+jobs:
+  backend_tests:
+    name: Backend tests
+    runs-on: ubuntu-latest
+    env:
+      LANGSMITH_TRACING: "false"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install system packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends tesseract-ocr
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install ".[dev]"
+
+      - name: Run tests
+        run: pytest backend/tests -q
+
+      - name: Run ruff
+        run: ruff check backend
+
+  frontend_build:
+    name: Frontend build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build frontend
+        working-directory: frontend
+        run: npm run build
+
+  docker_build:
+    name: Docker build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Build production image
+        run: docker build --tag alcohol-label-verifier:${{ github.sha }} .
+
+  deploy_vps:
+    name: Deploy VPS
+    runs-on: ubuntu-latest
+    needs:
+      - backend_tests
+      - frontend_build
+      - docker_build
+    if: github.event_name == 'workflow_dispatch'
+    environment:
+      name: production
+      url: ${{ vars.BASE_URL || 'https://label.af5.org' }}
+    env:
+      VPS_HOST: ${{ vars.VPS_HOST || secrets.VPS_HOST }}
+      VPS_USER: ${{ vars.VPS_USER || secrets.VPS_USER || 'labeldeploy' }}
+      VPS_SSH_PRIVATE_KEY: ${{ secrets.VPS_SSH_PRIVATE_KEY }}
+      BASE_URL: ${{ vars.BASE_URL || secrets.BASE_URL || 'https://label.af5.org' }}
+      APP_ROOT: ${{ vars.APP_ROOT || secrets.APP_ROOT }}
+      COMPOSE_PROJECT_NAME: ${{ vars.COMPOSE_PROJECT_NAME || secrets.COMPOSE_PROJECT_NAME }}
+      VISION_PROVIDER: ${{ vars.VISION_PROVIDER || secrets.VISION_PROVIDER }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_BASE_URL: ${{ vars.OPENAI_BASE_URL || secrets.OPENAI_BASE_URL }}
+      OPENAI_MODEL: ${{ vars.OPENAI_MODEL || secrets.OPENAI_MODEL }}
+      OPENAI_TIMEOUT_SECONDS: ${{ vars.OPENAI_TIMEOUT_SECONDS || secrets.OPENAI_TIMEOUT_SECONDS }}
+      OPENAI_IMAGE_MAX_SIDE: ${{ vars.OPENAI_IMAGE_MAX_SIDE || secrets.OPENAI_IMAGE_MAX_SIDE }}
+      OPENAI_IMAGE_JPEG_QUALITY: ${{ vars.OPENAI_IMAGE_JPEG_QUALITY || secrets.OPENAI_IMAGE_JPEG_QUALITY }}
+      WORKER_IDLE_SLEEP_SECONDS: ${{ vars.WORKER_IDLE_SLEEP_SECONDS || secrets.WORKER_IDLE_SLEEP_SECONDS }}
+      SEED_DEMO_DATA: ${{ vars.SEED_DEMO_DATA || secrets.SEED_DEMO_DATA || 'false' }}
+      REVIEW_TOKEN: ${{ secrets.REVIEW_TOKEN }}
+      PUBLIC_REVIEW_ENABLED: ${{ vars.PUBLIC_REVIEW_ENABLED || secrets.PUBLIC_REVIEW_ENABLED }}
+      LANGSMITH_TRACING: ${{ vars.LANGSMITH_TRACING || secrets.LANGSMITH_TRACING }}
+      LANGSMITH_API_KEY: ${{ secrets.LANGSMITH_API_KEY }}
+      LANGSMITH_PROJECT: ${{ vars.LANGSMITH_PROJECT || secrets.LANGSMITH_PROJECT }}
+      LANGSMITH_ENDPOINT: ${{ vars.LANGSMITH_ENDPOINT || secrets.LANGSMITH_ENDPOINT }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install deploy tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends curl openssh-client tar
+
+      - name: Validate deploy configuration
+        run: |
+          missing=0
+          if [ -z "$VPS_HOST" ]; then
+            echo "::error::Set VPS_HOST as a GitHub Actions variable or secret"
+            missing=1
+          fi
+          if [ -z "$VPS_SSH_PRIVATE_KEY" ]; then
+            echo "::error::Set VPS_SSH_PRIVATE_KEY as a GitHub Actions secret"
+            missing=1
+          fi
+          exit "$missing"
+
+      - name: Configure SSH
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$VPS_SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -T 30 -H "$VPS_HOST" > ~/.ssh/known_hosts
+
+      - name: Test SSH connection
+        run: |
+          ssh \
+            -i ~/.ssh/id_ed25519 \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            "$VPS_USER@$VPS_HOST" \
+            "echo deploy-ssh-ok"
+
+      - name: Deploy to VPS
+        run: bash scripts/deploy-label-vps.sh
+
+      - name: Purge presentation queue
+        if: ${{ inputs.purge_cases == 'true' }}
+        run: |
+          ssh \
+            -i ~/.ssh/id_ed25519 \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            "$VPS_USER@$VPS_HOST" \
+            "APP_DIR='${APP_ROOT:-/opt/label}' COMPOSE_PROJECT_NAME='${COMPOSE_PROJECT_NAME:-label}' bash -s" <<'REMOTE'
+          set -euo pipefail
+
+          APP_DIR="${APP_DIR:-/opt/label}"
+          COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-label}"
+          cd "$APP_DIR/app"
+          COMPOSE=(docker compose --project-name "$COMPOSE_PROJECT_NAME" --env-file "$APP_DIR/.env" -f docker-compose.production.yml)
+
+          "${COMPOSE[@]}" stop worker
+          "${COMPOSE[@]}" exec -T api python - <<'PY'
+          from backend.app.db.models import (
+              AuditEvent,
+              Batch,
+              FieldResultRow,
+              HumanDecision,
+              LabelCase,
+              ProviderUsage,
+              TierEvent,
+              VerificationJob,
+          )
+          from backend.app.db.session import SessionLocal
+
+          models = (
+              FieldResultRow,
+              TierEvent,
+              ProviderUsage,
+              HumanDecision,
+              AuditEvent,
+              VerificationJob,
+              LabelCase,
+              Batch,
+          )
+
+          with SessionLocal() as session:
+              counts = {model.__tablename__: session.query(model).count() for model in models}
+              for model in models:
+                  session.query(model).delete(synchronize_session=False)
+              session.commit()
+
+          print("Purged presentation queue:", counts)
+          PY
+          "${COMPOSE[@]}" up -d worker
+          REMOTE
+
+      - name: Smoke production
+        run: bash scripts/smoke-production.sh
